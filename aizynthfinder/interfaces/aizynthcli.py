@@ -18,6 +18,9 @@ from aizynthfinder.aizynthfinder import AiZynthFinder
 from aizynthfinder.utils.files import cat_hdf_files, split_file, start_processes
 from aizynthfinder.utils.logging import logger, setup_logger
 
+# for drawing
+from aizynthfinder.reactiontree import ReactionTree
+
 if TYPE_CHECKING:
     from aizynthfinder.utils.type_utils import StrDict, Callable, List, Optional
 
@@ -101,6 +104,12 @@ def _get_arguments() -> argparse.Namespace:
         nargs="+",
         help="a number of modules that performs post-processing tasks",
     )
+    parser.add_argument(
+        "--draw_images",
+        action="store_true",
+        default=False,
+        help="if provided, draw images to file",
+    )
     return parser.parse_args()
 
 
@@ -138,6 +147,7 @@ def _process_single_smiles(
     do_clustering: bool,
     route_distance_model: Optional[str],
     post_processing: List[_PostProcessingJob],
+    draw_images: bool = True, # TODO
 ) -> None:
     output_name = output_name or "trees.json"
     finder.target_smiles = smiles
@@ -175,6 +185,7 @@ def _process_multi_smiles(
     do_clustering: bool,
     route_distance_model: Optional[str],
     post_processing: List[_PostProcessingJob],
+    draw_images: bool = True,
 ) -> None:
     output_name = output_name or "output.hdf5"
     with open(filename, "r") as fileobj:
@@ -206,10 +217,42 @@ def _process_multi_smiles(
         )
         results["trees"].append(finder.routes.dicts)
 
-    data = pd.DataFrame.from_dict(results)
-    with warnings.catch_warnings():  # This wil suppress a PerformanceWarning
-        warnings.simplefilter("ignore")
-        data.to_hdf(output_name, key="table", mode="w")
+    # handle drawing
+    if draw_images:
+        base_output_dir = os.path.dirname(output_name)
+        image_output_dir = os.path.join(base_output_dir, "images")
+        print ("Drawing routes to", image_output_dir)
+        os.makedirs(image_output_dir, exist_ok=True)
+        trees = results["trees"]
+        for molecule_id, tree in enumerate(trees):
+            molecule_output_dir = os.path.join(
+                image_output_dir,
+                f"molecule_{molecule_id}"
+            )
+            os.makedirs(molecule_output_dir, exist_ok=True)
+
+            for route_num, route in enumerate(tree):
+
+                image_filename = os.path.join(molecule_output_dir, f"route{route_num:03d}.png")
+                print ("Drawing image to", image_filename)
+
+                ReactionTree.from_dict(route).to_image().save(image_filename)
+
+                break # first route only?
+
+    if output_name.endswith(".json"):
+        # save to json file
+        with open(output_name, "w") as f:
+            json.dump(results, f, indent=4)
+    else:
+
+        data = pd.DataFrame.from_dict(results)
+        with warnings.catch_warnings():  # This wil suppress a PerformanceWarning
+            warnings.simplefilter("ignore")
+            if output_name.endswith(".csv") or output_name.endswith(".csv.gz"):
+                data.to_csv(output_name)
+            else: # hdf format
+                data.to_hdf(output_name, key="table", mode="w")
     logger().info(f"Output saved to {output_name}")
 
 
@@ -282,6 +325,7 @@ def main() -> None:
         args.cluster,
         args.route_distance_model,
         post_processing,
+        draw_images=args.draw_images,
     )
 
 
